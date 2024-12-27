@@ -1,116 +1,101 @@
 import json
 
-
-def get_mu(value, points):
+def calculate_membership(value: float, points: list) -> float:
+    #Вычисляет степень принадлежности для заданного значения на основе линейно-кусочной функции.
     for i in range(len(points) - 1):
-        x_0, mu_0 = points[i]
-        x_1, mu_1 = points[i + 1]
-        if x_0 <= value <= x_1:
-            if mu_0 == mu_1:
-                return mu_0
-            else:
-                mu_0 + (mu_1 - mu_0) * (value - x_0) / (x_1 - x_0)      
-    return 0
+        x1, y1 = points[i]
+        x2, y2 = points[i + 1]
+        if x1 <= value <= x2:
+            return y1 + (y2 - y1) * (value - x1) / (x2 - x1)
+    return 0.0
 
+def fuzzify(value: float, membership_functions: list) -> dict:
+    #Фаззификация: вычисление степеней принадлежности.
+    fuzzy_values = {}
+    for term in membership_functions:
+        term_id = term['id']
+        points = term['points']
+        fuzzy_values[term_id] = calculate_membership(value, points)
+    return fuzzy_values
 
-def map_temperature_to_regulator(temperature_mu, regulation_map):
-    regulator_membership_values = {}
+def apply_rules(fuzzy_temperature: dict, rules: list, heating_membership_functions: dict) -> dict:
+   #Применение правил логического вывода.
+    fuzzy_heating = {}
+    for rule in rules:
+        temperature_term, heating_term = rule
+        activation = fuzzy_temperature.get(temperature_term, 0.0)
+        if heating_term not in fuzzy_heating:
+            fuzzy_heating[heating_term] = []
+        for point in heating_membership_functions[heating_term]['points']:
+            fuzzy_heating[heating_term].append((point[0], min(activation, point[1])))
+    return fuzzy_heating
 
-    for temp_term, temp_membership in temperature_mu.items():
-        regulator_term = regulation_map[temp_term]
-        regulator_membership_values[regulator_term] = max(regulator_membership_values.get(regulator_term, 0), temp_membership)
-    
-    print(f"projection on fuzzy set: {regulator_membership_values}\n")
-    return regulator_membership_values
+def defuzzify(fuzzy_heating: dict) -> float:
+    #Дефаззификация: нахождение четкого значения управления.
+    numerator = 0.0
+    denominator = 0.0
+    for _, points in fuzzy_heating.items():
+        for x, y in points:
+            numerator += x * y
+            denominator += y
+    return numerator / denominator if denominator != 0 else 0.0
 
+def main(temperature_json: str, heating_json: str, rules_json: str, current_temperature: float) -> float:
+    #Основная функция для вычисления оптимального управления.
+    temperature_membership_functions = json.loads(temperature_json)['температура']
+    heating_membership_functions = {item['id']: item for item in json.loads(heating_json)['уровень нагрева']}
+    rules = json.loads(rules_json)
 
-def fuzzification(input_value, fuzzy_set):
-    membership_values = {}
+    fuzzy_temperature = fuzzify(current_temperature, temperature_membership_functions)
+    print(fuzzy_temperature)
 
-    for term, points in fuzzy_set.items():
-        membership_values[term] = round(get_mu(input_value, points), 2)
+    fuzzy_heating = apply_rules(fuzzy_temperature, rules, heating_membership_functions)
+    print(fuzzy_heating)
 
-    print(f"fuzzification temperature {input_value}: {membership_values}\n")
-    return membership_values
+    optimal_heating = defuzzify(fuzzy_heating)
+    print(optimal_heating)
 
+    return round(optimal_heating, 2)
 
-def defuzzify_mean_of_maximum(regulator_membership_values, fuzzy_set):
-    max_membership = max(regulator_membership_values.values()) 
-    x_values = []  
+if __name__ == "__main__":
+    temperature_json = '''{
+        "температура": [
+            {
+                "id": "холодно",
+                "points": [[0,1], [18,1], [22,0], [50,0]]
+            },
+            {
+                "id": "комфортно",
+                "points": [[18, 0], [22, 1], [24, 1], [26, 0]]
+            },
+            {
+                "id": "жарко",
+                "points": [[0, 0], [24, 0], [26, 1], [50, 1]]
+            }
+        ]
+    }'''
+    heating_json = '''{
+        "уровень нагрева": [
+            {
+                "id": "слабый",
+                "points": [[0, 1], [4, 1], [6, 0], [10, 0]]
+            },
+            {
+                "id": "умеренный",
+                "points": [[4, 0], [6, 1], [8, 1], [10, 0]]
+            },
+            {
+                "id": "интенсивный",
+                "points": [[8, 0], [10, 1], [12, 1], [14, 0]]
+            }
+        ]
+    }'''
+    rules_json = '''[
+        ["холодно", "интенсивный"],
+        ["комфортно", "умеренный"],
+        ["жарко", "слабый"]
+    ]'''
+    current_temperature = 20.0
 
-    for term, membership in regulator_membership_values.items():
-        if membership == max_membership:
-            points = fuzzy_set[term]
-            for i in range(len(points) - 1):
-                x_0, mu_0 = points[i]
-                x_1, mu_1 = points[i + 1]
-                
-                if mu_0 <= max_membership <= mu_0 or mu_1 <= max_membership <= mu_0:
-                    x_values.append(x_0) if mu_0 == mu_1 else x_values.append(x_0 + (x_1 - x_0) * (max_membership - mu_0) / (mu_1 - mu_0))
-                        
-    return sum(x_values) / len(x_values) if x_values else 0
-
-
-def main(temperatures_json: str, regulator_json: str, transition_json: str, temperature_input: float):
-    temperatures_fuzzy_set = json.loads(temperatures_json)
-    regulator_fuzzy_set = json.loads(regulator_json)
-    regulation_map = json.loads(transition_json)
-
-    temperature_membership_values = fuzzification(temperature_input, temperatures_fuzzy_set)
-    regulator_membership_values = map_temperature_to_regulator(temperature_membership_values, regulation_map)
-
-    mean_maximum = defuzzify_mean_of_maximum(regulator_membership_values, regulator_fuzzy_set)
-
-    print(f"meanmax fuzzification: {mean_maximum}\n")
-
-
-# Тестовый пример
-temperatures = """{
-    "холодно": [
-        [0, 1],
-        [16, 1],
-        [20, 0],
-        [50, 0]
-    ],
-    "комфортно": [
-        [16, 0],
-        [20, 1],
-        [22, 1],
-        [26, 0]
-    ],
-    "жарко": [
-        [0, 0],
-        [22, 0],
-        [26, 1],
-        [50, 1]
-    ]
-}"""
-
-regulator = """{
-    "слабо": [
-        [0, 1],
-        [6, 1],
-        [10, 0],
-        [20, 0]
-    ],
-    "умеренно": [
-        [6, 0],
-        [10, 1],
-        [12, 1],
-        [16, 0]
-    ],
-    "интенсивно": [
-        [0, 0],
-        [12, 0],
-        [16, 1],
-        [20, 1]
-    ]
-}"""
-
-transition = """{
-    "холодно": "интенсивно",
-    "комфортно": "умеренно",
-    "жарко": "слабо"
-}"""
-
-main(temperatures, regulator, transition, 25)
+    result = main(temperature_json, heating_json, rules_json, current_temperature)
+    print(f"Значение оптимального управления: {result}")
